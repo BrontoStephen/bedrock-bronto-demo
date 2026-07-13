@@ -30,6 +30,19 @@ processors:
       - key: telemetry.exporter
         value: adot-collector
         action: upsert
+  # The botocore instrumentation (up to 0.64b0) still emits the deprecated
+  # gen_ai.system attribute on its Bedrock spans, metrics and content events.
+  # The current GenAI semconv replaced it with gen_ai.provider.name (same
+  # well-known value, "aws.bedrock"). ADOT ships no transform processor, so
+  # the attributes processor does the rename; `insert` is a no-op once
+  # upstream emits gen_ai.provider.name itself.
+  attributes/genai:
+    actions:
+      - key: gen_ai.provider.name
+        from_attribute: gen_ai.system
+        action: insert
+      - key: gen_ai.system
+        action: delete
 
 exporters:
   otlphttp/bronto:
@@ -61,13 +74,13 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [resource, batch]
+      processors: [resource, attributes/genai, batch]
       exporters: [otlphttp/bronto, otlphttp/bronto2, debug]
     metrics:
       receivers: [otlp]
-      processors: [resource, batch]
+      processors: [resource, attributes/genai, batch]
       exporters: [otlphttp/bronto, otlphttp/bronto2, debug]
     logs:
       receivers: [otlp]
-      processors: [resource, batch]
+      processors: [resource, attributes/genai, batch]
       exporters: [otlphttp/bronto, otlphttp/bronto2, debug]

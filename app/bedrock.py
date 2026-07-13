@@ -80,36 +80,38 @@ def converse(prompt: str, system: str | None = None) -> dict:
     in_tok = usage.get("inputTokens", 0)
     out_tok = usage.get("outputTokens", 0)
 
-    # Content on the trace as plain span attributes, following the current
-    # GenAI semconv (gen_ai.input.messages / gen_ai.output.messages /
-    # gen_ai.system_instructions, JSON-encoded). The botocore instrumentation
-    # only emits content as log events - the deprecated pattern - and plain
-    # attributes are what Bronto's trace search indexes, so this makes the
+    # Prompt/response content in the shape the current GenAI semconv defines
+    # (gen_ai.input.messages / gen_ai.output.messages / gen_ai.system_instructions,
+    # JSON-encoded), reused below for both the span and the log record.
+    finish_reason = resp.get("stopReason")
+    input_messages = json.dumps(
+        [{"role": "user", "parts": [{"type": "text", "content": prompt}]}]
+    )
+    output_messages = json.dumps(
+        [
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "content": text}],
+                "finish_reason": finish_reason or "",
+            }
+        ]
+    )
+    system_instructions = (
+        json.dumps([{"type": "text", "content": system}]) if system else None
+    )
+
+    # Content on the trace as plain span attributes. The botocore
+    # instrumentation only emits content as log events - the deprecated
+    # per-role gen_ai.*.message / gen_ai.choice pattern - and plain attributes
+    # are what Bronto's trace search indexes, so this makes the
     # prompt/response visible in the trace view too (the current span here is
     # the POST /chat server span).
     span = trace.get_current_span()
     if span.is_recording():
-        span.set_attribute(
-            "gen_ai.input.messages",
-            json.dumps([{"role": "user", "parts": [{"type": "text", "content": prompt}]}]),
-        )
-        span.set_attribute(
-            "gen_ai.output.messages",
-            json.dumps(
-                [
-                    {
-                        "role": "assistant",
-                        "parts": [{"type": "text", "content": text}],
-                        "finish_reason": resp.get("stopReason") or "",
-                    }
-                ]
-            ),
-        )
-        if system:
-            span.set_attribute(
-                "gen_ai.system_instructions",
-                json.dumps([{"type": "text", "content": system}]),
-            )
+        span.set_attribute("gen_ai.input.messages", input_messages)
+        span.set_attribute("gen_ai.output.messages", output_messages)
+        if system_instructions:
+            span.set_attribute("gen_ai.system_instructions", system_instructions)
 
     _latency_hist.record(latency_ms, {"model": MODEL_ID})
     _token_counter.add(in_tok, {"model": MODEL_ID, "direction": "input"})
@@ -119,24 +121,24 @@ def converse(prompt: str, system: str | None = None) -> dict:
     # Structured log: short event name as the body, data as queryable attributes
     # (the OTel LoggingHandler maps `extra` into log-record attributes, which
     # arrive in Bronto as first-class fields rather than text in the message).
-    log.info(
-        "bedrock.converse",
-        extra={
-            "event.name": "bedrock.converse",
-            "outcome": "success",
-            "gen_ai.request.model": MODEL_ID,
-            "gen_ai.usage.input_tokens": in_tok,
-            "gen_ai.usage.output_tokens": out_tok,
-            "gen_ai.response.stop_reason": resp.get("stopReason"),
-            "latency_ms": round(latency_ms, 1),
-            # Full prompt/response as log attributes so they are queryable in
-            # Bronto (span events carrying this content are not surfaced as
-            # searchable fields by Bronto's trace ingestion).
-            "gen_ai.prompt": prompt,
-            "gen_ai.completion": text,
-            "gen_ai.system_prompt": system or "",
-        },
-    )
+    log_attrs = {
+        "event.name": "bedrock.converse",
+        "outcome": "success",
+        "gen_ai.request.model": MODEL_ID,
+        "gen_ai.usage.input_tokens": in_tok,
+        "gen_ai.usage.output_tokens": out_tok,
+        "gen_ai.response.finish_reasons": [finish_reason] if finish_reason else [],
+        "latency_ms": round(latency_ms, 1),
+        # Full prompt/response as log attributes so they are queryable in
+        # Bronto, using the current semconv names/shape (the deprecated flat
+        # gen_ai.prompt / gen_ai.completion / gen_ai.system_prompt attributes
+        # were removed from the GenAI registry).
+        "gen_ai.input.messages": input_messages,
+        "gen_ai.output.messages": output_messages,
+    }
+    if system_instructions:
+        log_attrs["gen_ai.system_instructions"] = system_instructions
+    log.info("bedrock.converse", extra=log_attrs)
 
     return {
         "text": text,
@@ -144,5 +146,5 @@ def converse(prompt: str, system: str | None = None) -> dict:
         "input_tokens": in_tok,
         "output_tokens": out_tok,
         "latency_ms": round(latency_ms, 1),
-        "stop_reason": resp.get("stopReason"),
+        "stop_reason": finish_reason,
     }
