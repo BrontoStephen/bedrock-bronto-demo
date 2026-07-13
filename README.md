@@ -24,13 +24,106 @@ one account; pass `-var bronto_api_key_2=...` / `TF_VAR_bronto_api_key_2` (same
 way as `bronto_api_key` below), or `BRONTO_API_KEY_2` / `BRONTO_OTLP_BASE_2` in
 `.env` for local dev, to activate the second.
 
-## What gets sent to Bronto
+## What the app does
 
-| Signal  | Source | Examples |
-|---------|--------|----------|
-| Traces  | `opentelemetry-instrumentation-botocore` (GenAI semconv) + FastAPI | `Bedrock Runtime.Converse` spans nested under `POST /chat`, with `gen_ai.*` attributes |
-| Metrics | custom meters in `app/bedrock.py` + auto HTTP metrics | `demo.bedrock.tokens`, `demo.bedrock.latency`, `demo.bedrock.invocations`, `http.server.duration` |
-| Logs    | Python `logging` bridged to OTel | `bedrock.converse ok …`, `chat request received …` (trace-correlated) |
+A single-page chat UI backed by a FastAPI service (`app/main.py`) with three
+endpoints:
+
+- `GET /` — serves the static chat page.
+- `GET /healthz` — ALB health check.
+- `POST /chat` — takes `{"prompt": "...", "system": "..."}` and calls the
+  **Amazon Bedrock Converse API** (`app/bedrock.py`) with an EU cross-region
+  inference profile (default `eu.amazon.nova-micro-v1:0`, overridable via
+  `BEDROCK_MODEL_ID`). Returns the model's reply plus token counts, latency
+  and stop reason.
+
+A scheduled **driver Lambda** (`infra/lambda/driver.py`, every 10 minutes)
+POSTs rotating prompts to `/chat`, so telemetry flows into Bronto around the
+clock. The app exists to *generate* realistic GenAI telemetry; observability
+is the product, the chat is the excuse.
+
+## The OpenTelemetry data it generates
+
+All three signals are emitted by the app's in-process OTel SDK
+(`app/telemetry.py`), shipped over OTLP/HTTP to the ADOT sidecar, and
+forwarded to Bronto. Resource attributes on everything: `service.name`
+(`bedrock-bronto-demo`), `service.namespace` (`bronto-demos`),
+`deployment.environment.name`, plus `telemetry.exporter=adot-collector`
+stamped by the collector.
+
+### Traces
+
+Each chat request produces one trace with two spans:
+
+| Span | Instrumentation | Key attributes |
+|------|-----------------|----------------|
+| `POST /chat` (server) | `opentelemetry-instrumentation-fastapi` (stable HTTP semconv) | `http.request.method`, `http.route`, `url.path`, `http.response.status_code`; plus the GenAI content set here by `app/bedrock.py`: `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions` (JSON, current GenAI semconv shape) |
+| `Bedrock Runtime.Converse` (client, nested) | `opentelemetry-instrumentation-botocore` Bedrock extension | `gen_ai.operation.name=chat`, `gen_ai.provider.name=aws.bedrock` (renamed from deprecated `gen_ai.system` by the collector), `gen_ai.request.model`, `gen_ai.request.temperature`, `gen_ai.request.max_tokens`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.response.finish_reasons`, `rpc.*` AWS call attributes |
+
+### Metrics
+
+| Metric | Type / unit | Source | Attributes |
+|--------|-------------|--------|------------|
+| `gen_ai.client.token.usage` | histogram, `{token}` | botocore instrumentation | `gen_ai.token.type` (input/output), `gen_ai.provider.name`, `gen_ai.operation.name`, `gen_ai.request.model` |
+| `gen_ai.client.operation.duration` | histogram, `s` | botocore instrumentation | same as above |
+| `http.server.request.duration` | histogram, `s` | FastAPI instrumentation (stable HTTP semconv) | `http.request.method`, `http.route`, `http.response.status_code` |
+| `demo.bedrock.tokens` | counter, `{token}` | custom meter in `app/bedrock.py` | `model`, `direction` (input/output) |
+| `demo.bedrock.latency` | histogram, `ms` | custom meter | `model` |
+| `demo.bedrock.invocations` | counter, `{call}` | custom meter | `model`, `outcome` (success/error) |
+
+The `demo.*` series duplicate what the semconv metrics carry, deliberately —
+they give the demo simple, memorable names to chart in Bronto.
+
+### Logs
+
+Python `logging` is bridged to OTel via `LoggingHandler`, so every app log
+record ships to Bronto trace-correlated (and still prints to stdout for
+CloudWatch):
+
+- `chat.request` — one per request; `prompt.chars`.
+- `bedrock.converse` — one per Bedrock call; `gen_ai.request.model`,
+  `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens`,
+  `gen_ai.response.finish_reasons`, `latency_ms`, `outcome`, and the full
+  content as `gen_ai.input.messages` / `gen_ai.output.messages` /
+  `gen_ai.system_instructions` (JSON, same shape as on the span). On failure:
+  `outcome=error` + `error.message`.
+- `gen_ai.user.message` / `gen_ai.system.message` / `gen_ai.choice` — emitted
+  by the botocore instrumentation itself (the deprecated per-role content
+  events; see the semconv section below).
+
+## Getting the latest GenAI semantic conventions
+
+The OTel GenAI conventions are still *experimental* and moved fast in
+2025/2026: `gen_ai.system` became `gen_ai.provider.name`, and prompt/response
+content moved from per-role log events (`gen_ai.user.message`, `gen_ai.choice`,
+…) to JSON-encoded `gen_ai.input.messages` / `gen_ai.output.messages` /
+`gen_ai.system_instructions` attributes. This repo pins the latest SDK
+(`opentelemetry-sdk 1.43.0` / contrib `0.64b0`) and uses four mechanisms to
+emit the *current* shape rather than the deprecated one:
+
+1. **`OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,http`** — set in
+   `docker-compose.yml` / `infra/ecs.tf` and merged (never overwritten) by
+   `app/telemetry.py`. The `http` token switches the FastAPI instrumentation
+   to the stable HTTP conventions (without it you get deprecated `http.method`
+   / `http.server.duration`). The `gen_ai_latest_experimental` token is
+   **ignored by the botocore Bedrock extension up to 0.64b0** — it always
+   emits the legacy GenAI shape — but is kept so the app flips to the new
+   shape automatically once upstream migrates to `opentelemetry-util-genai`.
+2. **`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true`** — the switch
+   the Bedrock extension *does* read today; enables prompt/response content
+   capture.
+3. **Manual current-shape content attributes** — because of (1), the upstream
+   instrumentation only emits content as deprecated log events, which never
+   reach the span. `app/bedrock.py` therefore sets `gen_ai.input.messages` /
+   `gen_ai.output.messages` / `gen_ai.system_instructions` (current semconv
+   names and JSON schema) itself, on the server span and on the
+   `bedrock.converse` log record.
+4. **Collector-side rename of `gen_ai.system`** — the ADOT collector's
+   `attributes/genai` processor (`collector/otel-collector-config.yaml`)
+   renames the deprecated `gen_ai.system` attribute the instrumentation still
+   emits to `gen_ai.provider.name` on traces, metrics and logs. It's an
+   `insert`+`delete`, so it becomes a no-op once upstream emits
+   `gen_ai.provider.name` natively.
 
 ## Layout
 
@@ -129,12 +222,10 @@ as first-class, correctly-typed fields (NUMBER/STRING) rather than parsing a
 flat text line. Avoid printf-style `log.info("... %s", x)` for data you want to
 query — put it in `extra` instead.
 
-Prompt/response content is sent both ways: on the `bedrock.converse` log event
-(`gen_ai.prompt` / `gen_ai.completion`) and on the request's span as plain
-attributes per the current GenAI semconv (`gen_ai.input.messages` /
-`gen_ai.output.messages` / `gen_ai.system_instructions`), so it's visible in
-the trace view as well — the upstream botocore instrumentation only emits
-content as log events, which never reach the span.
+Prompt/response content lands on both the log record and the span (see "The
+OpenTelemetry data it generates" above) because Bronto indexes plain span
+attributes for trace search, while content tucked inside log events isn't
+visible from the trace view.
 
 ## Verify
 

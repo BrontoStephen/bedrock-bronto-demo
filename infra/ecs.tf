@@ -39,9 +39,11 @@ resource "aws_ecs_task_definition" "app" {
         { name = "OTEL_EXPORTER_OTLP_PROTOCOL", value = "http/protobuf" },
         { name = "OTEL_SERVICE_NAME", value = var.project },
         { name = "DEPLOYMENT_ENV", value = "aws" },
-        # Turn on the experimental Bedrock GenAI semconv: token usage, model,
-        # and prompt/response on the spans. Without this only rpc.* is emitted.
-        { name = "OTEL_SEMCONV_STABILITY_OPT_IN", value = "gen_ai_latest_experimental" },
+        # Latest semconv opt-ins: stable HTTP conventions + latest GenAI shape
+        # where instrumentations support it (see app/telemetry.py, which
+        # merges these in as a fallback too). Content capture is gated by the
+        # CAPTURE_MESSAGE_CONTENT var below.
+        { name = "OTEL_SEMCONV_STABILITY_OPT_IN", value = "gen_ai_latest_experimental,http" },
         { name = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", value = "true" },
       ]
       dependsOn = [{ containerName = "collector", condition = "START" }]

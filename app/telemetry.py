@@ -18,12 +18,47 @@ from __future__ import annotations
 import logging
 import os
 
-# Must be set before the botocore instrumentation is imported/instrumented:
-# the Bedrock GenAI semantic conventions (token usage, model, prompt/response)
-# are experimental and only activate when this opt-in is present. Without it,
-# Bedrock calls are traced only as generic AWS-API spans (rpc.* attributes).
-os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental")
+# Capture prompt/response content on GenAI telemetry. This is the only env
+# var the botocore Bedrock extension actually reads today; it must be set
+# before instrument() runs.
 os.environ.setdefault("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true")
+
+# Opt in to the latest semantic conventions instead of the deprecated shapes
+# the instrumentations default to:
+#
+#   gen_ai_latest_experimental - the latest (experimental) GenAI conventions.
+#     As of opentelemetry-instrumentation-botocore 0.64b0 the Bedrock
+#     extension does NOT read this yet: it always emits gen_ai.* span
+#     attributes and metrics, but in the legacy shape - the deprecated
+#     gen_ai.system attribute (replaced by gen_ai.provider.name) and content
+#     on the deprecated per-role gen_ai.{system,user,assistant,tool}.message /
+#     gen_ai.choice log events (replaced by gen_ai.input.messages /
+#     gen_ai.output.messages). Keeping the opt-in set means we flip to the new
+#     shape automatically once upstream migrates; until then bedrock.py sets
+#     the current-semconv content attributes itself and the collector renames
+#     gen_ai.system -> gen_ai.provider.name.
+#
+#   http - the stable HTTP conventions (http.request.method,
+#     http.response.status_code, url.path, http.server.request.duration in
+#     seconds). Without this, the FastAPI/ASGI instrumentation still emits the
+#     deprecated 2023-era names (http.method, http.status_code,
+#     http.server.duration in ms).
+#
+# Merged (not overwritten) so platform-set opt-ins survive.
+_SEMCONV_OPT_INS = ("gen_ai_latest_experimental", "http")
+
+
+def _opt_in_latest_semconv() -> None:
+    current = [
+        v.strip()
+        for v in os.getenv("OTEL_SEMCONV_STABILITY_OPT_IN", "").split(",")
+        if v.strip()
+    ]
+    merged = current + [t for t in _SEMCONV_OPT_INS if t not in current]
+    os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = ",".join(merged)
+
+
+_opt_in_latest_semconv()
 
 from opentelemetry import metrics, trace
 from opentelemetry._logs import set_logger_provider
@@ -47,7 +82,7 @@ def _build_resource() -> Resource:
         {
             "service.name": os.getenv("OTEL_SERVICE_NAME", "bedrock-bronto-demo"),
             "service.namespace": os.getenv("SERVICE_NAMESPACE", "bronto-demos"),
-            "deployment.environment": os.getenv("DEPLOYMENT_ENV", "demo"),
+            "deployment.environment.name": os.getenv("DEPLOYMENT_ENV", "demo"),
         }
     )
 
