@@ -60,11 +60,11 @@ variable "desired_count" {
 }
 
 variable "task_cpu" {
-  type        = number
-  default     = 512
+  type    = number
+  default = 512
 }
 
 variable "task_memory" {
-  type        = number
-  default     = 1024
+  type    = number
+  default = 1024
 }

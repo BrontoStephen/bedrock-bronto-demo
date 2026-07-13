@@ -27,9 +27,9 @@ resource "aws_ecs_task_definition" "app" {
 
   container_definitions = jsonencode([
     {
-      name      = "app"
-      image     = local.app_image
-      essential = true
+      name         = "app"
+      image        = local.app_image
+      essential    = true
       portMappings = [{ containerPort = 8000, protocol = "tcp" }]
       environment = [
         { name = "AWS_REGION", value = var.region },
