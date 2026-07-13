@@ -60,11 +60,13 @@ resource "aws_ecs_task_definition" "app" {
       essential = true
       environment = [
         { name = "BRONTO_OTLP_BASE", value = var.bronto_otlp_base },
+        { name = "BRONTO_OTLP_BASE_2", value = var.bronto_otlp_base_2 },
       ]
       secrets = [
         # ADOT loads its YAML config from this env var.
         { name = "AOT_CONFIG_CONTENT", valueFrom = aws_ssm_parameter.collector_config.arn },
         { name = "BRONTO_API_KEY", valueFrom = aws_secretsmanager_secret.bronto_api_key.arn },
+        { name = "BRONTO_API_KEY_2", valueFrom = aws_secretsmanager_secret.bronto_api_key_2.arn },
       ]
       logConfiguration = {
         logDriver = "awslogs"

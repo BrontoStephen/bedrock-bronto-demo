@@ -17,6 +17,13 @@ The app exports to the collector over loopback (`localhost:4318`). The collector
 holds the Bronto credential and fans each signal out to the matching Bronto
 endpoint, keeping the app code vendor-neutral.
 
+The collector can broadcast to a **second Bronto account** too — an optional
+`otlphttp/bronto2` exporter runs alongside the first in every pipeline. Leave
+`bronto_api_key_2` / `bronto_otlp_base_2` unset (the default) to only export to
+one account; pass `-var bronto_api_key_2=...` / `TF_VAR_bronto_api_key_2` (same
+way as `bronto_api_key` below), or `BRONTO_API_KEY_2` / `BRONTO_OTLP_BASE_2` in
+`.env` for local dev, to activate the second.
+
 ## What gets sent to Bronto
 
 | Signal  | Source | Examples |
@@ -33,6 +40,7 @@ collector/                ADOT collector config (otlp receiver → otlphttp to B
 docker/Dockerfile.app     App image
 docker-compose.yml        Local smoke test (app + collector)
 infra/                    Terraform: ECR, ECS Fargate, ALB, IAM, Secrets Manager, SSM
+infra/lambda/driver.py    Scheduled Lambda that POSTs rotating prompts to /chat
 ```
 
 ## Prerequisites
@@ -85,6 +93,14 @@ To redeploy app code: rebuild/push the image (step 2), then
 The ECS service runs `desired_count = 1` and ECS restarts the task if it ever
 stops, so the demo stays continuously available at the ALB URL.
 
+**Continuous telemetry:** a driver Lambda (`infra/lambda/driver.py`, wired up
+in `infra/driver.tf`) is invoked by an EventBridge rule every 10 minutes and
+POSTs a rotating prompt to the ALB's `/chat` endpoint, so traces, logs and
+metrics stream into Bronto around the clock even when nobody is using the demo
+by hand. Prompts vary in topic and length (and occasionally set a system
+prompt) to keep the gen-AI spans and token metrics interesting. Change the
+cadence via the `schedule_expression` Terraform variable.
+
 A **weekly automated rebuild** keeps the image patched ahead of the account's
 security scan:
 
@@ -112,6 +128,13 @@ attributes (e.g. `gen_ai.usage.input_tokens`, `latency_ms`, `outcome`). The OTel
 as first-class, correctly-typed fields (NUMBER/STRING) rather than parsing a
 flat text line. Avoid printf-style `log.info("... %s", x)` for data you want to
 query — put it in `extra` instead.
+
+Prompt/response content is sent both ways: on the `bedrock.converse` log event
+(`gen_ai.prompt` / `gen_ai.completion`) and on the request's span as plain
+attributes per the current GenAI semconv (`gen_ai.input.messages` /
+`gen_ai.output.messages` / `gen_ai.system_instructions`), so it's visible in
+the trace view as well — the upstream botocore instrumentation only emits
+content as log events, which never reach the span.
 
 ## Verify
 

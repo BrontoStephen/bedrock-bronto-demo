@@ -9,6 +9,18 @@ resource "aws_secretsmanager_secret_version" "bronto_api_key" {
   secret_string = var.bronto_api_key
 }
 
+# Second Bronto account's ingestion key (broadcast target alongside the first).
+# Value defaults to "" until a second account is provisioned.
+resource "aws_secretsmanager_secret" "bronto_api_key_2" {
+  name                    = "${var.project}/bronto-api-key-2"
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret_version" "bronto_api_key_2" {
+  secret_id     = aws_secretsmanager_secret.bronto_api_key_2.id
+  secret_string = var.bronto_api_key_2
+}
+
 # Collector config -> SSM Parameter. The ADOT collector loads it from the
 # AOT_CONFIG_CONTENT env var, which we map from this parameter.
 resource "aws_ssm_parameter" "collector_config" {

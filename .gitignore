@@ -6,3 +6,6 @@ __pycache__/
 *.tfstate.*
 .terraform.lock.hcl
 infra/builds/
+# Saved terraform plans embed sensitive variable values - never commit.
+tfplan*
+*.tfplan

@@ -10,11 +10,13 @@ GenAI metrics and structured log lines that are convenient to demo in Bronto.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
 
 import boto3
+from opentelemetry import trace
 
 from telemetry import get_meter
 
@@ -77,6 +79,37 @@ def converse(prompt: str, system: str | None = None) -> dict:
     usage = resp.get("usage", {})
     in_tok = usage.get("inputTokens", 0)
     out_tok = usage.get("outputTokens", 0)
+
+    # Content on the trace as plain span attributes, following the current
+    # GenAI semconv (gen_ai.input.messages / gen_ai.output.messages /
+    # gen_ai.system_instructions, JSON-encoded). The botocore instrumentation
+    # only emits content as log events - the deprecated pattern - and plain
+    # attributes are what Bronto's trace search indexes, so this makes the
+    # prompt/response visible in the trace view too (the current span here is
+    # the POST /chat server span).
+    span = trace.get_current_span()
+    if span.is_recording():
+        span.set_attribute(
+            "gen_ai.input.messages",
+            json.dumps([{"role": "user", "parts": [{"type": "text", "content": prompt}]}]),
+        )
+        span.set_attribute(
+            "gen_ai.output.messages",
+            json.dumps(
+                [
+                    {
+                        "role": "assistant",
+                        "parts": [{"type": "text", "content": text}],
+                        "finish_reason": resp.get("stopReason") or "",
+                    }
+                ]
+            ),
+        )
+        if system:
+            span.set_attribute(
+                "gen_ai.system_instructions",
+                json.dumps([{"type": "text", "content": system}]),
+            )
 
     _latency_hist.record(latency_ms, {"model": MODEL_ID})
     _token_counter.add(in_tok, {"model": MODEL_ID, "direction": "input"})

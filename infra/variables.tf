@@ -28,6 +28,25 @@ variable "bronto_api_key" {
   description = "Bronto ingestion API key. Pass via TF_VAR_bronto_api_key or -var; stored in Secrets Manager."
 }
 
+variable "bronto_otlp_base_2" {
+  type        = string
+  default     = ""
+  description = "Second Bronto account's OTLP ingestion base URL. Leave blank until a second account is provisioned - the collector fans out to it in addition to (not instead of) the first account."
+}
+
+variable "bronto_api_key_2" {
+  type        = string
+  sensitive   = true
+  default     = ""
+  description = "Second Bronto account's ingestion API key. Leave blank until a second account is provisioned."
+}
+
+variable "schedule_expression" {
+  type        = string
+  default     = "rate(10 minutes)"
+  description = "How often the driver Lambda POSTs a prompt to /chat to keep telemetry flowing."
+}
+
 variable "image_tag" {
   type        = string
   default     = "latest"

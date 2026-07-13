@@ -29,7 +29,7 @@ resource "aws_iam_role_policy" "execution_secrets" {
       {
         Effect   = "Allow"
         Action   = ["secretsmanager:GetSecretValue"]
-        Resource = [aws_secretsmanager_secret.bronto_api_key.arn]
+        Resource = [aws_secretsmanager_secret.bronto_api_key.arn, aws_secretsmanager_secret.bronto_api_key_2.arn]
       },
       {
         Effect   = "Allow"
