@@ -47,7 +47,8 @@ is the product, the chat is the excuse.
 All three signals are emitted by the app's in-process OTel SDK
 (`app/telemetry.py`), shipped over OTLP/HTTP to the ADOT sidecar, and
 forwarded to Bronto. Resource attributes on everything: `service.name`
-(`bedrock-bronto-demo`), `service.namespace` (`bronto-demos`),
+(`AWS Bedrock` — the Bronto dataset name), `service.namespace`
+(`AWS LLM Services` — the Bronto collection it reports into),
 `deployment.environment.name`, plus `telemetry.exporter=adot-collector`
 stamped by the collector.
 
@@ -232,7 +233,7 @@ visible from the trace view.
 - App: `curl "$(terraform output -raw alb_url)/healthz"` and POST to `/chat`.
 - Collector exports: check CloudWatch log group `/ecs/bedrock-bronto-demo/collector`
   for per-signal summaries and the absence of `Exporting failed`.
-- Bronto: confirm traces/metrics/logs for `service.name=bedrock-bronto-demo` arrive.
+- Bronto: confirm traces/metrics/logs for `service.name=AWS Bedrock` arrive.
 
 ## Teardown
 

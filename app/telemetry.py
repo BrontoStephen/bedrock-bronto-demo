@@ -80,8 +80,8 @@ _CONFIGURED = False
 def _build_resource() -> Resource:
     return Resource.create(
         {
-            "service.name": os.getenv("OTEL_SERVICE_NAME", "bedrock-bronto-demo"),
-            "service.namespace": os.getenv("SERVICE_NAMESPACE", "bronto-demos"),
+            "service.name": os.getenv("OTEL_SERVICE_NAME", "AWS Bedrock"),
+            "service.namespace": os.getenv("SERVICE_NAMESPACE", "AWS LLM Services"),
             "deployment.environment.name": os.getenv("DEPLOYMENT_ENV", "demo"),
         }
     )

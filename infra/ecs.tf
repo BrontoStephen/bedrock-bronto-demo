@@ -37,7 +37,8 @@ resource "aws_ecs_task_definition" "app" {
         # App -> collector sidecar over the task's loopback interface.
         { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "http://localhost:4318" },
         { name = "OTEL_EXPORTER_OTLP_PROTOCOL", value = "http/protobuf" },
-        { name = "OTEL_SERVICE_NAME", value = var.project },
+        { name = "OTEL_SERVICE_NAME", value = var.otel_service_name },
+        { name = "SERVICE_NAMESPACE", value = var.otel_service_namespace },
         { name = "DEPLOYMENT_ENV", value = "aws" },
         # Latest semconv opt-ins: stable HTTP conventions + latest GenAI shape
         # where instrumentations support it (see app/telemetry.py, which

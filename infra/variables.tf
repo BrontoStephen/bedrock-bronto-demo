@@ -10,6 +10,18 @@ variable "region" {
   description = "AWS region to deploy into."
 }
 
+variable "otel_service_name" {
+  type        = string
+  default     = "AWS Bedrock"
+  description = "OTEL_SERVICE_NAME - the dataset name the app's telemetry reports into in Bronto."
+}
+
+variable "otel_service_namespace" {
+  type        = string
+  default     = "AWS LLM Services"
+  description = "service.namespace resource attribute - the collection the dataset reports into in Bronto."
+}
+
 variable "bedrock_model_id" {
   type        = string
   default     = "eu.amazon.nova-micro-v1:0"
